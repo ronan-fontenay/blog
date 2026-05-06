@@ -1,13 +1,13 @@
 ---
-title: "Building an Exhaustive ADS-B Feeder Station with Buildroot on Raspberry Pi 3"
+title: Building an Exhaustive ADS-B Feeder Station with Buildroot on Raspberry Pi 3
 date: 2026-05-03
-categories: 
-  - "automation"
-  - "data"
-  - "embedded"
-  - "it"
-image: "adsb-feeder-buildroot.jpg"
-description: "Build a robust and ultra-lightweight ADS-B feeder station on a Raspberry Pi using Buildroot. This guide details the configuration of readsb to simultaneously feed FlightRadar24, ADSB Exchange, and ADSB.fi."
+categories:
+  - automation
+  - data
+  - embedded
+  - it
+image: adsb-feeder-buildroot.png
+description: Build a robust and ultra-lightweight ADS-B feeder station on a Raspberry Pi using Buildroot. This guide details the configuration of readsb to simultaneously feed FlightRadar24, ADSB Exchange, and ADSB.fi.
 ---
 
 Following our work on maritime AIS, we are now targeting aviation. This guide explains how to build a professional-grade ADS-B station on a Raspberry Pi 3. We are using **Buildroot** to create a custom Linux firmware that is ultra-lightweight, boots in seconds, and runs entirely in RAM (read-only) to prevent SD card corruption.
