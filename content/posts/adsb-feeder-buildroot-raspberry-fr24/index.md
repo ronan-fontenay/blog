@@ -6,7 +6,7 @@ categories:
   - data
   - embedded
   - it
-image: adsb-feeder-buildroot.png
+image: buildroot-adsb-feeder.png
 description: Build a robust and ultra-lightweight ADS-B feeder station on a Raspberry Pi using Buildroot. This guide details the configuration of readsb to simultaneously feed FlightRadar24, ADSB Exchange, and ADSB.fi.
 ---
 
