@@ -1,0 +1,64 @@
+baseURL = 'https://www.rfontenay.fr/'
+locale = 'en-en'
+title = "Ronan's Blog"
+theme = "hugo-theme-stack"
+
+[params]
+    mainSections = ["posts"]
+    featuredImageField = "cover.image"
+
+    [params.sidebar]
+        avatar = "/images/logo.png"
+        title = "Ronan's Blog"
+        subtitle = "IoT, Automation & Embedded Linux"
+        rounded = true
+
+# --- Configuration correcte des Widgets (Objets) ---
+
+# Widgets de la page d'accueil
+[[params.widgets.homepage]]
+    type = "categories"
+    limit = 10
+[[params.widgets.homepage]]
+    type = "tag-cloud"
+    limit = 10
+
+# Widgets des pages d'articles
+[[params.widgets.page]]
+    type = "categories"
+    limit = 10
+[[params.widgets.page]]
+    type = "tag-cloud"
+    limit = 10
+
+# ---------------------------------------------------
+
+[markup.goldmark.renderer]
+    unsafe = true
+
+[menu]
+    [[menu.main]]
+        identifier = "home"
+        name = "Home"
+        url = "/"
+        weight = 1
+        params = { icon = "home" }
+    [[menu.main]]
+        identifier = "linkedin"
+        name = "LinkedIn"
+        url = "https://fr.linkedin.com/in/ronan-fontenay-1aa76930"
+        weight = 1
+        params = { icon = "brand-linkedin" }
+
+[outputs]
+    home = ["HTML", "RSS"]
+    page = ["HTML"]
+    section = ["HTML"]
+
+[markup]
+  [markup.highlight]
+    codeFences = true        # Active la coloration pour les blocs ```
+    guessSyntax = true       # Hugo essaie de deviner le langage si tu l'oublies
+    lineNos = false          # Désactive les numéros de ligne (plus propre pour copier-coller)
+    style = "monokai"        # Un thème sombre classique, change par "github" pour du clair
+    noClasses = true         # Plus simple : Hugo injecte le style directement (Inline CSS)

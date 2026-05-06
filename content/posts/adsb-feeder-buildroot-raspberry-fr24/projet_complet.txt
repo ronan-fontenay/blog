@@ -1,0 +1,425 @@
+==========================================================
+FICHIER : external-pi/external.desc
+==========================================================
+name: PI_FEEDER_EXT
+desc: Station ADS-B pour Pi3
+
+
+
+==========================================================
+FICHIER : external-pi/external.mk
+==========================================================
+include $(sort $(wildcard $(BR2_EXTERNAL_PI_FEEDER_EXT_PATH)/package/*/*.mk))
+
+
+
+==========================================================
+FICHIER : external-pi/Config.in
+==========================================================
+source "$BR2_EXTERNAL_PI_FEEDER_EXT_PATH/package/librtlsdr-blog/Config.in"
+source "$BR2_EXTERNAL_PI_FEEDER_EXT_PATH/package/readsb/Config.in"
+source "$BR2_EXTERNAL_PI_FEEDER_EXT_PATH/package/mlat-client/Config.in"
+
+
+
+==========================================================
+FICHIER : external-pi/package/librtlsdr-blog/librtlsdr-blog.mk
+==========================================================
+LIBRTLSDR_BLOG_VERSION = master
+LIBRTLSDR_BLOG_SITE = $(call github,rtlsdrblog,rtl-sdr-blog,$(LIBRTLSDR_BLOG_VERSION))
+LIBRTLSDR_BLOG_LICENSE = GPL-2.0+
+LIBRTLSDR_BLOG_INSTALL_STAGING = YES
+
+LIBRTLSDR_BLOG_DEPENDENCIES = libusb
+
+# On active explicitement le détachement du driver kernel (DVB-T) 
+# et l'installation des outils (rtl_sdr, rtl_biast, etc.)
+LIBRTLSDR_BLOG_CONF_OPTS = \
+	-DINSTALL_UDEV_RULES=ON \
+	-DDETACH_KERNEL_DRIVER=ON
+
+$(eval $(cmake-package))
+
+
+
+==========================================================
+FICHIER : external-pi/package/librtlsdr-blog/Config.in
+==========================================================
+config BR2_PACKAGE_LIBRTLSDR_BLOG
+	bool "librtlsdr-blog"
+	select BR2_PACKAGE_LIBUSB  # Force la sélection de libusb
+	help
+	  Version optimisée pour RTL-SDR Blog V4 avec support Bias-T.
+
+	  https://github.com/rtlsdrblog/rtl-sdr-blog
+
+
+
+==========================================================
+FICHIER : external-pi/package/readsb/Config.in
+==========================================================
+config BR2_PACKAGE_READSB
+	bool "readsb"
+	select BR2_PACKAGE_LIBRTLSDR_BLOG
+	select BR2_PACKAGE_NCURSES
+	select BR2_PACKAGE_ZLIB
+	select BR2_PACKAGE_ZSTD  # <-- On ajoute cette ligne
+	help
+	  Readsb est un décodeur ADS-B haute performance.
+
+
+
+==========================================================
+FICHIER : external-pi/package/readsb/readsb.mk
+==========================================================
+READSB_VERSION = master
+READSB_SITE = $(call github,wiedehopf,readsb,$(READSB_VERSION))
+READSB_DEPENDENCIES = librtlsdr-blog ncurses zlib zstd
+READSB_LICENSE = GPL-3.0
+
+# On utilise le hook SED pour les versions (ça, ça marche et c'est propre)
+define READSB_FIX_VERSION_MACROS
+	sed -i 's/READSB_SHORT_VERSION/"2025"/g' $(@D)/json_out.c
+	sed -i 's/READSB_SHORT_COMMIT/"v4"/g' $(@D)/json_out.c
+endef
+READSB_POST_PATCH_HOOKS += READSB_FIX_VERSION_MACROS
+
+# On passe RTLSDR=yes ET on force le flag de compilation manuellement dans CFLAGS
+# pour être certain qu'il ne soit pas écrasé.
+READSB_MAKE_OPTS = \
+	RTLSDR=yes \
+	CFLAGS="$(TARGET_CFLAGS) -D_GNU_SOURCE -D_DEFAULT_SOURCE -DENABLE_RTLSDR"
+
+define READSB_BUILD_CMDS
+	$(TARGET_MAKE_ENV) $(MAKE) $(TARGET_CONFIGURE_OPTS) -C $(@D) $(READSB_MAKE_OPTS)
+endef
+
+define READSB_INSTALL_TARGET_CMDS
+	$(INSTALL) -D -m 0755 $(@D)/readsb $(TARGET_DIR)/usr/bin/readsb
+	$(INSTALL) -D -m 0755 $(@D)/viewadsb $(TARGET_DIR)/usr/bin/viewadsb
+endef
+
+$(eval $(generic-package))
+
+
+
+==========================================================
+FICHIER : external-pi/package/mlat-client/Config.in
+==========================================================
+config BR2_PACKAGE_MLAT_CLIENT
+	bool "mlat-client"
+	depends on BR2_PACKAGE_PYTHON3
+	select BR2_PACKAGE_PYTHON_PYASYNCORE
+	select BR2_PACKAGE_PYTHON_PYASYNCHAT
+	select BR2_PACKAGE_PYTHON3_ZLIB
+	help
+	  Mode S Multilateration client for ADS-B feeders.
+	  
+	  This package connects to dump1090/readsb, extracts 
+	  high-resolution timestamps, and sends them to a 
+	  multilateration server.
+
+	  https://github.com/mutability/mlat-client
+
+comment "mlat-client needs python3"
+	depends on !BR2_PACKAGE_PYTHON3
+
+
+
+==========================================================
+FICHIER : external-pi/package/mlat-client/mlat-client.mk
+==========================================================
+################################################################################
+#
+# mlat-client
+#
+################################################################################
+
+MLAT_CLIENT_VERSION = 0.2.13
+MLAT_CLIENT_SITE = $(call github,mutability,mlat-client,v$(MLAT_CLIENT_VERSION))
+MLAT_CLIENT_LICENSE = GPL-3.0
+MLAT_CLIENT_LICENSE_FILES = COPYING
+MLAT_CLIENT_SETUP_TYPE = setuptools
+
+$(eval $(python-package))
+
+
+
+==========================================================
+FICHIER : overlay/etc/init.d/S99mlat-client-adsbx
+==========================================================
+#!/bin/sh
+#
+# Start mlat-client for ADSBexchange
+#
+
+NAME="mlat-client-adsbx"
+DAEMON="/usr/bin/mlat-client"
+PIDFILE="/var/run/$NAME.pid"
+
+ARGS="--input-type dump1090 \
+      --input-connect 127.0.0.1:30005 \
+      --lat 47.249544584520905 \
+      --lon -2.262069274883702 \
+      --alt 45m \
+      --user Rfontenay_ADSBX \
+      --server feed.adsbexchange.com:31090 \
+      --no-udp \
+      --results beast,connect,127.0.0.1:30004"
+
+case "$1" in
+  start)
+        echo -n "Starting $NAME: "
+        start-stop-daemon -S -q -b -m -p $PIDFILE -x $DAEMON -- $ARGS
+        echo "OK"
+        ;;
+  stop)
+        echo -n "Stopping $NAME: "
+        start-stop-daemon -K -q -p $PIDFILE
+        echo "OK"
+        rm -f $PIDFILE
+        ;;
+  restart|reload)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+  *)
+        echo "Usage: $0 {start|stop|restart|reload}"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+
+
+==========================================================
+FICHIER : overlay/etc/init.d/S50readsb
+==========================================================
+#!/bin/sh
+
+DAEMON="readsb"
+BINARY="/usr/bin/readsb"
+
+# Identifiant unique pour éviter les doublons sur les cartes communautaires
+SITE_UUID="b8c4d720-a6f3-4e89-91b5-3c82d41ef9a1"
+
+# Arguments finaux sans l'option biastee
+ARGS="--device-type rtlsdr \
+      --net \
+      --fix \
+      --dcfilter \
+      --lat 47.249544584520905 \
+      --lon -2.262069274883702 \
+      --net-ri-port 0 \
+      --net-ro-port 30002 \
+      --net-bi-port 30004 \
+      --net-bo-port 30005 \
+      --write-json /tmp/readsb \
+      --net-connector feed.adsb.fi,30004,beast_reduce_out,uuid=$SITE_UUID \
+      --net-connector feed.adsbexchange.com,30004,beast_reduce_out"
+
+case "$1" in
+    start)
+        echo -n "Starting $DAEMON: "
+
+        # PLAN B : On active l'alim antenne via l'outil externe juste avant readsb
+        /usr/bin/rtl_biast -b 1 > /dev/null 2>&1
+        sleep 1
+
+        start-stop-daemon -S -b -x $BINARY -- $ARGS
+        [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+        ;;
+    stop)
+        echo -n "Stopping $DAEMON: "
+        start-stop-daemon -K -x $BINARY
+        [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+
+
+==========================================================
+FICHIER : overlay/etc/init.d/S99mlat-client-adsbfi
+==========================================================
+#!/bin/sh
+#
+# Start mlat-client for adsb.fi
+#
+
+NAME="mlat-client"
+DAEMON="/usr/bin/mlat-client"
+PIDFILE="/var/run/$NAME.pid"
+
+# Tes paramètres exacts validés
+ARGS="--input-type dump1090 \
+      --input-connect 127.0.0.1:30005 \
+      --lat 47.249544584520905 \
+      --lon -2.262069274883702 \
+      --alt 45m \
+      --user Rfontenay \
+      --server feed.adsb.fi:31090 \
+      --no-udp \
+      --results beast,connect,127.0.0.1:30004"
+
+case "$1" in
+  start)
+        echo -n "Starting $NAME: "
+        # -b lance en tâche de fond (background)
+        # -m crée le fichier PID pour pouvoir l'arrêter proprement ensuite
+        start-stop-daemon -S -q -b -m -p $PIDFILE -x $DAEMON -- $ARGS
+        echo "OK"
+        ;;
+  stop)
+        echo -n "Stopping $NAME: "
+        start-stop-daemon -K -q -p $PIDFILE
+        echo "OK"
+        # On supprime le PID file proprement
+        rm -f $PIDFILE
+        ;;
+  restart|reload)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+  *)
+        echo "Usage: $0 {start|stop|restart|reload}"
+        exit 1
+        ;;
+esac
+
+exit 0
+
+
+
+==========================================================
+FICHIER : overlay/etc/init.d/S60fr24
+==========================================================
+#!/bin/sh
+
+DAEMON="fr24feed"
+BINARY="/usr/bin/fr24feed"
+
+case "$1" in
+    start)
+        echo -n "Starting $DAEMON: "
+        # Petite pause pour laisser le décodeur démarrer
+        sleep 2
+        start-stop-daemon -S -b -x $BINARY
+        [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+        ;;
+    stop)
+        echo -n "Stopping $DAEMON: "
+        start-stop-daemon -K -x $BINARY
+        [ $? -eq 0 ] && echo "OK" || echo "FAIL"
+        ;;
+    restart)
+        $0 stop
+        sleep 1
+        $0 start
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart}"
+        exit 1
+esac
+
+
+
+==========================================================
+FICHIER : overlay/etc/network/interfaces
+==========================================================
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+
+auto wlan0
+iface wlan0 inet dhcp
+    pre-up sleep 2
+    wpa-conf /etc/wpa_supplicant.conf
+
+
+
+==========================================================
+FICHIER : overlay/etc/lighttpd/lighttpd.conf
+==========================================================
+# Modules nécessaires
+server.modules += ( "mod_alias", "mod_setenv" )
+
+# --- CONFIGURATION DU ROOT ---
+# On définit le dossier de tar1090 comme racine du serveur
+server.document-root        = "/var/www/tar1090"
+server.port                 = 80
+index-file.names            = ( "index.html" )
+
+# Types MIME essentiels
+mimetype.assign = (
+  ".html" => "text/html",
+  ".css"  => "text/css",
+  ".js"   => "application/javascript",
+  ".json" => "application/json",
+  ".png"  => "image/png",
+  ".svg"  => "image/svg+xml"
+)
+
+# --- LIAISON DES DONNÉES TEMPS RÉEL ---
+# Comme on est à la racine, tar1090 va chercher ses fichiers dans /data/
+# On pointe donc /data/ vers ton dossier en RAM (/tmp/readsb)
+alias.url += ( "/data/" => "/tmp/readsb/" )
+
+# --- OPTIMISATION FLUIDITÉ ---
+# On interdit le cache sur les JSON pour éviter que les avions ne "sautent"
+$HTTP["url"] =~ "^/data/" {
+    setenv.add-response-header = ( "Cache-Control" => "no-cache, no-store, must-revalidate" )
+}
+
+
+
+==========================================================
+FICHIER : overlay/etc/modprobe.d/rtlsdr-blacklist.conf
+==========================================================
+blacklist dvb_usb_rtl28xxu
+blacklist rtl2832
+blacklist rtl2830
+
+
+
+==========================================================
+FICHIER : overlay/etc/wpa_supplicant.conf
+==========================================================
+country=FR
+network={
+    ssid="Librentez"
+    psk="0297665339"
+}
+
+
+
+==========================================================
+FICHIER : overlay/etc/fr24feed.ini
+==========================================================
+receiver="beast-tcp"
+fr24key="481f944a1b05c1e8"
+host="127.0.0.1:30005"
+bs="no"
+raw="no"
+logmode="1"
+logpath="/tmp"
+mlat="yes"
+mlat-without-gps="yes"
+
+
+
