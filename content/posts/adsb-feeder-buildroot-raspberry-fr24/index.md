@@ -7,10 +7,10 @@ categories:
   - embedded
   - it
 image: buildroot-adsb-feeder.png
-description: Build a robust and ultra-lightweight ADS-B feeder station on a Raspberry Pi using Buildroot. This guide details the configuration of readsb to simultaneously feed FlightRadar24, ADSB Exchange, and ADSB.fi.
+description: Build a robust and ultra-lightweight ADS-B feeder station on a Raspberry Pi using Buildroot. This guide details the configuration of readsb to simultaneously feed FlightRadar24, ADSB Exchange, and ADSB.fi, with automated deployment and Monit supervision.
 ---
 
-Following our work on maritime AIS, we are now targeting aviation. This guide explains how to build a professional-grade ADS-B station on a Raspberry Pi 3. We are using **Buildroot** to create a custom Linux firmware that is ultra-lightweight, boots in seconds, and runs entirely in RAM (read-only) to prevent SD card corruption.
+This guide explains how to build a professional-grade ADS-B station on a Raspberry Pi 3. We are using **Buildroot** to create a custom Linux firmware that is ultra-lightweight, boots in seconds, runs entirely in RAM (read-only) to prevent SD card corruption, and features automatic process supervision.
 
 * * *
 
@@ -24,10 +24,13 @@ cd buildroot
 git checkout 2025.02.13
 ```
 
-Our project tree is organized as follows:
+Our project tree is organized as follows to streamline building and deployment:
 
 ```text
 .
+├── Makefile               # <--- Root wrapper for easy building
+├── upload.sh              # <--- Automated deployment script
+├── device_table_custom.txt# <--- Custom file permissions rules
 ├── buildroot/             # Official sources (git clone)
 ├── external-pi/           # Custom recipes layer
 │   ├── Config.in
@@ -41,6 +44,7 @@ Our project tree is organized as follows:
 └── overlay/               # System files (Init, Network, Configs)
     ├── etc/
     │   ├── fr24feed.ini
+    │   ├── monitrc        # <--- Process watchdog config
     │   ├── init.d/
     │   │   ├── S50readsb
     │   │   ├── S60fr24
@@ -53,6 +57,20 @@ Our project tree is organized as follows:
     ├── usr/bin/fr24feed
     └── var/www/tar1090
 ```
+
+To make compilation easier, create a wrapper `Makefile` at the root of your project:
+
+**Makefile**:
+```makefile
+BR2_EXTERNAL_PATH := $(CURDIR)/external-pi
+
+all:
+	$(MAKE) -C buildroot BR2_EXTERNAL=$(BR2_EXTERNAL_PATH)
+
+%:
+	$(MAKE) -C buildroot BR2_EXTERNAL=$(BR2_EXTERNAL_PATH) $@
+```
+Now, you can simply type `make menuconfig` or `make` from the root folder.
 
 * * *
 
@@ -196,6 +214,17 @@ The overlay directory contains custom configuration files and pre-compiled binar
 
 > **Note:** Some binaries like `fr24feed` and the `tar1090` web interface files should be placed manually in the `overlay/` directory before building if they are not managed by a Buildroot recipe.
 
+#### Device Table Customization (Required for Monit)
+
+We use Monit for process supervision, which strictly requires its configuration file to have `0600` permissions. We enforce this at the Buildroot generation level using a custom device table.
+
+**device_table_custom.txt** (at project root):
+```text
+# <name>        <type>  <mode>  <uid>   <gid>   <major> <minor> <start> <inc> <count>
+/etc/monitrc    f       600     0       0       -       -       -       -       -
+```
+*You must link this file in `make menuconfig` under `System configuration -> Path to the permission tables` (e.g., `system/device_table.txt $(BR2_EXTERNAL_PI_FEEDER_EXT_PATH)/../device_table_custom.txt`).*
+
 #### Network & WiFi
 
 **overlay/etc/network/interfaces**:
@@ -238,7 +267,6 @@ DAEMON="readsb"
 BINARY="/usr/bin/readsb"
 SITE_UUID="YOUR_UUID"
 
-# Arguments finaux
 ARGS="--device-type rtlsdr \
       --net \
       --fix \
@@ -390,6 +418,25 @@ case "$1" in
 esac
 ```
 
+#### Process Supervision (Monit)
+
+If `fr24feed` crashes or stops responding on its HTTP port, Monit will automatically restart it.
+
+**overlay/etc/monitrc**:
+```text
+set daemon 60
+set log syslog
+set httpd port 2812
+    use address 0.0.0.0
+    allow localhost
+    allow 192.168.1.0/24
+
+check process fr24feed matching "/usr/bin/fr24feed"
+    start program = "/etc/init.d/S60fr24 start"
+    stop program  = "/etc/init.d/S60fr24 stop"
+    if failed host 127.0.0.1 port 8754 protocol http for 2 cycles then restart
+```
+
 #### Feeder Configurations
 
 **overlay/etc/fr24feed.ini**:
@@ -462,7 +509,7 @@ This is the professional way. The files are generated correctly every time you r
         - Select `rpi-firmware`.
         - Set `Configuration file` to `$(BR2_EXTERNAL_PI_FEEDER_EXT_PATH)/board/config.txt`.
     *   **System configuration**:
-        - Set `Custom scripts to run after creating the images` to point to a script that copies your `cmdline.txt` to the output folder (or use the default RPi post-image script and point it to your custom file).
+        - Set `Custom scripts to run after creating the images` to point to a script that copies your `cmdline.txt` to the output folder.
 
 #### Method B: Manual (Quick Edit on SD Card)
 If you don't want to touch Buildroot files, you can edit the files on the SD card after flashing.
@@ -472,62 +519,84 @@ If you don't want to touch Buildroot files, you can edit the files on the SD car
 3.  **Edit `config.txt`**: Add the line `initramfs rootfs.cpio.gz followkernel`.
 4.  **Edit `cmdline.txt`**: Replace the content with `console=serial0,115200 console=tty1 root=/dev/ram0 rw rootwait`.
 
-**Note:** The Buildroot files in `buildroot/board/raspberrypi/` are templates. You should **never edit them directly**; always use a custom board directory in your `external-pi` layer as shown in Method A.
-
 * * *
 
 ### 6. Buildroot Setup Checklist
 
 Enable these options in `make menuconfig` to match our project's requirements:
 
-*   **Target options:** Cortex-A53, NEON-VFPV4, Hard float (EABIhf), instructions ARM (not Thumb2).
+*   **Target options:** Cortex-A53, NEON-VFPV4, Hard float (EABIhf), instructions ARM.
 *   **Toolchain:** `Glibc` library, Linux Headers `6.6.x`, `GCC 13.x`, `Binutils 2.43.x`. Enable `Wchar`, `Locale`, and `C++` support.
 *   **Kernel:** Custom Raspberry Pi kernel (`bcm2709_defconfig`) using the 6.6.y branch. Enable `Device Tree` support and `DTB overlay support`.
 *   **System Configuration:**
     - `Root login` enabled (password: `root`).
     - `DHCP` enabled on `eth0`.
     - `BR2_ROOTFS_OVERLAY` pointing to your `overlay/` directory.
-    - `Purge locale` (C, en_US).
+    - `Path to the permission tables` pointing to `$(BR2_EXTERNAL_PI_FEEDER_EXT_PATH)/../device_table_custom.txt`.
 *   **WiFi Stack:** `linux-firmware -> Broadcom BCM43xxx` & `Cypress CYW43xxx`.
 *   **Networking:** `lighttpd` (with `zlib`), `dropbear` (SSH), `wpa_supplicant` (with `nl80211`), `chrony` (NTP sync).
-*   **Tools:** `bash`, `python3` (with `zlib`, `unicodedata`, `pyasyncore`, `pyasynchat`), `socat`, `kmod` (tools), `ca-certificates`.
+*   **Tools:** `monit`, `bash`, `python3` (with `zlib`, `unicodedata`, `pyasyncore`, `pyasynchat`), `socat`, `kmod` (tools), `ca-certificates`.
 *   **Libraries:** `libusb`, `ncurses`, `readline`, `zlib`, `zstd`, `xxhash`.
-*   **Filesystem:** `cpio` with `gzip` compression.
+*   **Filesystem:** `cpio` with `gzip` compression (disable TAR).
 
 * * *
 
 ### 7. Deployment
 
-#### Method A: Manual SD Formatting
+#### Method A: Manual SD Formatting (First boot)
 
 ```bash
 # Format 1 FAT32 partition on SD card
 sudo mkfs.vfat -F 32 -n BOOT /dev/sdX1
 # Copy boot images from output/images/
-sudo cp zImage rootfs.cpio.gz bcm2710-rpi-3-b.dtb rpi-firmware/* /mnt/sdcard/
+sudo cp buildroot/output/images/zImage buildroot/output/images/rootfs.cpio.gz buildroot/output/images/bcm2710-rpi-3-b.dtb buildroot/output/images/rpi-firmware/* /mnt/sdcard/
 ```
 
-#### Method B: Network Deployment (Fast Iteration)
+#### Method B: Automated Network Deployment (Fast Iteration)
 
-Since the system runs in RAM, the SD card partition containing the kernel and initramfs is typically not mounted. You must mount it before updating.
+Since the system runs in RAM, the SD card partition containing the kernel is typically not mounted. To speed up development iterations, we use an automated script to mount the partition over SSH, upload the new image, and reboot.
+
+Create `upload.sh` at the root of your project:
 
 ```bash
-# 1. Prepare the Pi (mount the boot partition as RW)
-ssh root@192.168.1.123 "mkdir -p /boot && mount /dev/mmcblk0p1 /boot"
+#!/bin/sh
 
-# 2. Update from your build machine
-scp -O output/images/zImage output/images/rootfs.cpio.gz \
-       output/images/bcm2710-rpi-3-b.dtb root@192.168.1.123:/boot/
+set -e
 
-# 3. Reboot to apply changes
-ssh root@192.168.1.123 "reboot"
+# Update this IP to match your Pi's address
+IP="192.168.1.50"
+TARGET="root@$IP"
+BOOT="/boot"
+IMAGE_DIR="buildroot/output/images"
+
+echo "==> Montage de /boot..."
+ssh "$TARGET" "mkdir -p $BOOT && mount /dev/mmcblk0p1 $BOOT 2>/dev/null || true"
+
+echo "==> Upload de l'image..."
+scp -O \
+    "$IMAGE_DIR/zImage" \
+    "$IMAGE_DIR/rootfs.cpio.gz" \
+    "$IMAGE_DIR/bcm2710-rpi-3-b.dtb" \
+    "$TARGET:$BOOT/"
+
+echo "==> Synchronisation et reboot..."
+ssh "$TARGET" "sync && reboot"
+
+echo "==> Upload terminé, reboot en cours."
+
+echo "==> Nettoyage SSH."
+ssh-keygen -f '/home/ron/.ssh/known_hosts' -R "$IP"
+
+echo "==> Terminé"
 ```
+
+Make it executable (`chmod +x upload.sh`). After running `make`, just execute `./upload.sh` to update your station over the network in seconds!
 
 * * *
 
 ### 8. Results & Performance
 
-Once the station is up and running, you can access the local web interface (tar1090) to view real-time traffic. The custom Buildroot firmware ensures extremely low CPU usage and high stability.
+Once the station is up and running, you can access the local web interface (tar1090) to view real-time traffic. The custom Buildroot firmware ensures extremely low CPU usage, no SD card wear, and Monit ensures the data keeps flowing even if a process crashes.
 
 ![Figure 1: Local tar1090 interface showing live aircraft tracking.](readsb-tar1090-adsb-feeder.png)
 
