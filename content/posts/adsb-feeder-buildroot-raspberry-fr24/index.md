@@ -443,6 +443,7 @@ This is the professional way. The files are generated correctly every time you r
     **external-pi/board/config.txt**:
     ```text
     # RAM Boot Config
+    kernel=zImage
     initramfs rootfs.cpio.gz followkernel
     # Enable UART for console
     enable_uart=1
@@ -508,10 +509,17 @@ sudo cp zImage rootfs.cpio.gz bcm2710-rpi-3-b.dtb rpi-firmware/* /mnt/sdcard/
 
 #### Method B: Network Deployment (Fast Iteration)
 
+Since the system runs in RAM, the SD card partition containing the kernel and initramfs is typically not mounted. You must mount it before updating.
+
 ```bash
-# Update your running Pi remotely
+# 1. Prepare the Pi (mount the boot partition as RW)
+ssh root@192.168.1.123 "mkdir -p /boot && mount /dev/mmcblk0p1 /boot"
+
+# 2. Update from your build machine
 scp -O output/images/zImage output/images/rootfs.cpio.gz \
        output/images/bcm2710-rpi-3-b.dtb root@192.168.1.123:/boot/
+
+# 3. Reboot to apply changes
 ssh root@192.168.1.123 "reboot"
 ```
 
